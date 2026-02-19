@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import Empty from '~/components/Empty.vue'
@@ -109,6 +109,14 @@ onMounted(() => {
     }
     performSearch(false)
   }
+
+  // 注册键盘事件
+  window.addEventListener('keydown', handleKeyDown)
+})
+
+onUnmounted(() => {
+  // 移除键盘事件
+  window.removeEventListener('keydown', handleKeyDown)
 })
 
 // 监听筛选条件变化
@@ -281,6 +289,93 @@ function handleFollowStateChanged(data: { mid: number, isFollowing: boolean }) {
   updateUserRelation(data.mid, data.isFollowing)
 }
 
+// 键盘导航
+const focusedIndex = ref(-1)
+const userGridRef = ref<HTMLElement>()
+
+function getGridColumns(): number {
+  if (!userGridRef.value)
+    return 1
+  const template = getComputedStyle(userGridRef.value).gridTemplateColumns.trim()
+  const cols = template ? template.split(/\s+/).length : 1
+  return Math.max(1, cols)
+}
+
+function scrollFocusedIntoView(index: number) {
+  nextTick(() => {
+    if (!userGridRef.value)
+      return
+    const cards = userGridRef.value.children
+    const card = cards[index] as HTMLElement | undefined
+    if (card)
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  })
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape']
+  if (!NAV_KEYS.includes(e.key))
+    return
+
+  // 输入框内不拦截
+  const target = e.target as HTMLElement
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    return
+
+  // 只在有结果时生效
+  if (!results.value || results.value.length === 0)
+    return
+
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    focusedIndex.value = -1
+    return
+  }
+
+  e.preventDefault()
+
+  const current = focusedIndex.value
+  const total = results.value.length
+
+  // 首次按键：选中第一个
+  if (current === -1) {
+    focusedIndex.value = 0
+    scrollFocusedIntoView(0)
+    return
+  }
+
+  const cols = getGridColumns()
+
+  if (e.key === 'ArrowLeft') {
+    const newIndex = Math.max(0, current - 1)
+    focusedIndex.value = newIndex
+    scrollFocusedIntoView(newIndex)
+  }
+  else if (e.key === 'ArrowRight') {
+    const newIndex = Math.min(total - 1, current + 1)
+    focusedIndex.value = newIndex
+    scrollFocusedIntoView(newIndex)
+  }
+  else if (e.key === 'ArrowUp') {
+    const newIndex = Math.max(0, current - cols)
+    focusedIndex.value = newIndex
+    scrollFocusedIntoView(newIndex)
+  }
+  else if (e.key === 'ArrowDown') {
+    const newIndex = Math.min(total - 1, current + cols)
+    focusedIndex.value = newIndex
+    scrollFocusedIntoView(newIndex)
+  }
+  else if (e.key === 'Enter') {
+    if (current >= 0 && current < total) {
+      const user = results.value[current]
+      if (user.mid) {
+        window.location.href = `https://space.bilibili.com/${user.mid}`
+      }
+    }
+  }
+}
+
 // 暴露给父组件
 defineExpose({
   isLoading,
@@ -306,14 +401,15 @@ defineExpose({
       <Empty :description="t('common.no_data')" />
     </div>
 
-    <div v-else class="user-grid">
+    <div v-else ref="userGridRef" class="user-grid">
       <UserCard
-        v-for="user in results"
+        v-for="(user, index) in results"
         :key="user.mid"
         v-bind="{
           ...convertUserCardData(user),
           isFollowed: userRelations[user.mid]?.isFollowing ? 1 : 0,
         }"
+        :class="{ 'user-card--focused': focusedIndex === index }"
         :compact="true"
         @follow-state-changed="(mid: number, isFollowing: boolean) => handleFollowStateChanged({ mid, isFollowing })"
       />
@@ -363,6 +459,13 @@ defineExpose({
   @media (max-width: 640px) {
     grid-template-columns: 1fr;
   }
+}
+
+.user-card--focused {
+  box-shadow: 0 0 0 3px var(--bew-theme-color-20);
+  outline: 2px solid var(--bew-theme-color-60);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 
 .error-message {

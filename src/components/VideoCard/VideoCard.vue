@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<Props>(), {
   showWatcherLater: true,
   type: 'common',
   moreBtn: true,
+  focused: false,
 })
 
 interface Props {
@@ -29,6 +30,7 @@ interface Props {
   moreBtn?: boolean
   hideAuthor?: boolean
   isFollowingPage?: boolean
+  focused?: boolean
 }
 
 const layout = computed((): 'modern' | 'old' => {
@@ -309,6 +311,7 @@ provide('getVideoType', () => props.type!)
     :class="[
       layout === 'modern' ? 'mb-3' : 'mb-4',
       skeleton ? 'video-card-container--skeleton' : 'video-card-container--interactive',
+      focused && !skeleton ? 'video-card-container--focused' : '',
     ]"
   >
     <div
@@ -475,6 +478,18 @@ provide('getVideoType', () => props.type!)
 
 .video-card-container--interactive:active {
   box-shadow: 0 0 1px 6px var(--bew-fill-3);
+}
+
+/* Keyboard focus highlight */
+.video-card-container--focused.video-card-container--interactive::before {
+  background: var(--bew-theme-color-20);
+  opacity: 1;
+}
+
+.video-card-container--focused.video-card-container--interactive {
+  box-shadow: 0 0 1px 6px var(--bew-theme-color-20);
+  outline: 2px solid var(--bew-theme-color-60);
+  outline-offset: 2px;
 }
 
 .horizontal-card-cover {

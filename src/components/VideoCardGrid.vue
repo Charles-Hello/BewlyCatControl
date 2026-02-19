@@ -403,12 +403,18 @@ watch(() => props.loading, (newLoading, oldLoading) => {
   }
 })
 
+// -------------------------
+// 键盘导航
+// -------------------------
+const focusedRenderIndex = ref(-1)
+
 // 监听 items 变化后检查（处理初次加载不足的情况）
 watch(() => props.items.length, (newCount, oldCount) => {
   // items 被清空，重置状态（用户刷新了页面）
   if (newCount === 0 && oldCount > 0) {
     consecutiveEmptyLoads.value = 0
     lastItemsCount.value = 0
+    focusedRenderIndex.value = -1
     return
   }
 
@@ -470,6 +476,7 @@ onMounted(() => {
 
   setupScrollListeners()
   setupIntersectionObserver()
+  window.addEventListener('keydown', handleKeyDown)
   // 初始检查
   nextTick(() => {
     checkShouldPreload()
@@ -479,6 +486,7 @@ onMounted(() => {
 onUnmounted(() => {
   cleanupScrollListeners()
   cleanupIntersectionObserver()
+  window.removeEventListener('keydown', handleKeyDown)
   if (loadMoreRequestTimeout !== null) {
     window.clearTimeout(loadMoreRequestTimeout)
     loadMoreRequestTimeout = null
@@ -560,6 +568,7 @@ interface VideoCardRenderItem {
   skeleton: boolean
   type: 'rcmd' | 'appRcmd' | 'bangumi' | 'common'
   video: Video | undefined
+  focused: boolean
 }
 
 // 辅助函数：从 video 对象推断类型
@@ -578,6 +587,7 @@ function inferVideoTypeFromVideo(video: Video | undefined): 'rcmd' | 'appRcmd' |
 const renderItems = computed<VideoCardRenderItem[]>(() => {
   const items = limitedDisplayItems.value // 使用分块限制的 items
   const fallbackType = props.videoType || 'common'
+  const currentFocusedIndex = focusedRenderIndex.value
   const out: VideoCardRenderItem[] = Array.from({ length: items.length })
 
   for (let index = 0; index < items.length; index++) {
@@ -586,7 +596,7 @@ const renderItems = computed<VideoCardRenderItem[]>(() => {
 
     // 自动生成骨架屏
     if ((item as any)?._isSkeleton) {
-      out[index] = { key, item, skeleton: true, type: fallbackType, video: undefined }
+      out[index] = { key, item, skeleton: true, type: fallbackType, video: undefined, focused: false }
       continue
     }
 
@@ -594,7 +604,7 @@ const renderItems = computed<VideoCardRenderItem[]>(() => {
     if (props.isSkeletonItem) {
       try {
         if (props.isSkeletonItem(item)) {
-          out[index] = { key, item, skeleton: true, type: fallbackType, video: undefined }
+          out[index] = { key, item, skeleton: true, type: fallbackType, video: undefined, focused: false }
           continue
         }
       }
@@ -606,7 +616,8 @@ const renderItems = computed<VideoCardRenderItem[]>(() => {
     const video = getTransformedVideo(item)
     const skeleton = !video || (video.id == null && !video.bvid)
     const type = skeleton ? fallbackType : inferVideoTypeFromVideo(video)
-    out[index] = { key, item, skeleton, type, video }
+    const focused = !skeleton && index === currentFocusedIndex
+    out[index] = { key, item, skeleton, type, video, focused }
   }
 
   return out
@@ -694,6 +705,149 @@ function getUniqueKey(item: T, index: number): string | number {
     return `error-${index}`
   }
 }
+
+// -------------------------
+// 键盘导航辅助函数
+// -------------------------
+
+function getGridElement(): Element | null {
+  if (!gridContainerRef.value)
+    return null
+  return gridContainerRef.value.querySelector('.grid-adaptive, .grid-two-columns, .grid-one-column')
+}
+
+function getGridColumns(): number {
+  const gridEl = getGridElement()
+  if (!gridEl)
+    return 1
+  // computed style 中 gridTemplateColumns 返回空格分隔的实际列宽值（如 "200px 200px 200px"）
+  const template = getComputedStyle(gridEl).gridTemplateColumns.trim()
+  const cols = template ? template.split(/\s+/).length : 1
+  return Math.max(1, cols)
+}
+
+function isGridVisible(): boolean {
+  if (!gridContainerRef.value)
+    return false
+  const rect = gridContainerRef.value.getBoundingClientRect()
+  return rect.bottom > 0 && rect.top < window.innerHeight
+}
+
+function scrollFocusedIntoView(index: number) {
+  nextTick(() => {
+    const gridEl = getGridElement()
+    if (!gridEl)
+      return
+    const cards = gridEl.children
+    const card = cards[index] as HTMLElement | undefined
+    if (card)
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  })
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape']
+  if (!NAV_KEYS.includes(e.key))
+    return
+
+  // 输入框内不拦截
+  const target = e.target as HTMLElement
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    return
+
+  // 只在 grid 可见时生效
+  if (!isGridVisible())
+    return
+
+  const items = renderItems.value
+  if (items.length === 0)
+    return
+
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    focusedRenderIndex.value = -1
+    return
+  }
+
+  e.preventDefault()
+
+  const current = focusedRenderIndex.value
+
+  // 首次按键：选中第一个非骨架屏
+  if (current === -1) {
+    const firstReal = items.findIndex(it => !it.skeleton)
+    if (firstReal !== -1) {
+      focusedRenderIndex.value = firstReal
+      scrollFocusedIntoView(firstReal)
+    }
+    return
+  }
+
+  const cols = getGridColumns()
+  let next = current
+
+  switch (e.key) {
+    case 'ArrowRight':
+      next = current + 1
+      break
+    case 'ArrowLeft':
+      next = current - 1
+      break
+    case 'ArrowDown':
+      next = current + cols
+      break
+    case 'ArrowUp':
+      next = current - cols
+      break
+    case 'Enter': {
+      const focused = items[current]
+      if (focused?.video) {
+        const { bvid, id, epid } = focused.video
+        let url = ''
+        if (epid)
+          url = `https://www.bilibili.com/bangumi/play/ep${epid}`
+        else if (bvid)
+          url = `https://www.bilibili.com/video/${bvid}`
+        else if (id)
+          url = `https://www.bilibili.com/video/av${id}`
+        if (url)
+          window.location.href = url
+      }
+      return
+    }
+  }
+
+  // 边界限制，跳过骨架屏
+  next = Math.max(0, Math.min(next, items.length - 1))
+  // 若目标是骨架屏，向最近的非骨架屏靠拢
+  if (items[next]?.skeleton) {
+    // 向后找
+    let forward = next
+    while (forward < items.length && items[forward]?.skeleton) forward++
+    // 向前找
+    let backward = next
+    while (backward >= 0 && items[backward]?.skeleton) backward--
+
+    if (forward < items.length && backward >= 0) {
+      // 选最近的
+      next = (forward - next) <= (next - backward) ? forward : backward
+    }
+    else if (forward < items.length) {
+      next = forward
+    }
+    else if (backward >= 0) {
+      next = backward
+    }
+    else {
+      return
+    }
+  }
+
+  if (next !== current) {
+    focusedRenderIndex.value = next
+    scrollFocusedIntoView(next)
+  }
+}
 </script>
 
 <template>
@@ -729,7 +883,7 @@ function getUniqueKey(item: T, index: number): string | number {
         <VideoCard
           v-for="renderItem in renderItems"
           :key="renderItem.key"
-          v-memo="[renderItem.key, renderItem.skeleton, renderItem.type, renderItem.video, showPreview, showWatchLater, isHorizontal, moreBtn]"
+          v-memo="[renderItem.key, renderItem.skeleton, renderItem.type, renderItem.video, showPreview, showWatchLater, isHorizontal, moreBtn, renderItem.focused]"
           :skeleton="renderItem.skeleton"
           :type="renderItem.type"
           :video="renderItem.video"
@@ -738,6 +892,7 @@ function getUniqueKey(item: T, index: number): string | number {
           :horizontal="isHorizontal"
           :more-btn="moreBtn"
           :is-following-page="props.isFollowingPage"
+          :focused="renderItem.focused"
         >
           <template v-for="(_, name) in $slots" #[name]>
             <slot :name="name" :item="renderItem.item" />
