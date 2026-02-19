@@ -337,10 +337,23 @@ function handleKeyDown(e: KeyboardEvent) {
   const current = focusedIndex.value
   const total = results.value.length
 
-  // 首次按键：选中第一个
+  // 首次按键：选中视口内可见的第一个卡片（避免跳回顶部）
   if (current === -1) {
-    focusedIndex.value = 0
-    scrollFocusedIntoView(0)
+    if (!userGridRef.value)
+      return
+    const cards = userGridRef.value.children
+    let firstVisible = -1
+    for (let i = 0; i < cards.length; i++) {
+      const rect = (cards[i] as HTMLElement).getBoundingClientRect()
+      if (rect.bottom > 0 && rect.top < window.innerHeight) {
+        firstVisible = i
+        break
+      }
+    }
+    if (firstVisible !== -1) {
+      focusedIndex.value = firstVisible
+      scrollFocusedIntoView(firstVisible)
+    }
     return
   }
 

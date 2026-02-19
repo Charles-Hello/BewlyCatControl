@@ -773,12 +773,28 @@ function handleKeyDown(e: KeyboardEvent) {
 
   const current = focusedRenderIndex.value
 
-  // 首次按键：选中第一个非骨架屏
+  // 首次按键：选中当前视口内可见的第一个非骨架屏卡片（避免跳回顶部）
   if (current === -1) {
-    const firstReal = items.findIndex(it => !it.skeleton)
-    if (firstReal !== -1) {
-      focusedRenderIndex.value = firstReal
-      scrollFocusedIntoView(firstReal)
+    const gridEl = getGridElement()
+    if (!gridEl)
+      return
+    const cards = Array.from(gridEl.children) as HTMLElement[]
+    let firstVisible = -1
+    for (let i = 0; i < items.length; i++) {
+      if (items[i]?.skeleton)
+        continue
+      const card = cards[i]
+      if (!card)
+        continue
+      const rect = card.getBoundingClientRect()
+      if (rect.bottom > 0 && rect.top < window.innerHeight) {
+        firstVisible = i
+        break
+      }
+    }
+    if (firstVisible !== -1) {
+      focusedRenderIndex.value = firstVisible
+      scrollFocusedIntoView(firstVisible)
     }
     return
   }
